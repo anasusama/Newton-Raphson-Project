@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Newton-Raphson Solver</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Newton-Raphson Method Root Finder</h1>
+
+        <div class="input-group">
+            <label for="equation">Enter Function f(x) (e.g., x^3 - 8x + 5):</label>
+            <input type="text" id="equation" value="x^3 - 8x + 5" placeholder="f(x)">
+        </div>
+
+        <div class="input-group">
+            <label for="x0">Enter Initial Guess x₀:</label>
+            <input type="number" id="x0" value="0.0" step="any" placeholder="x0">
+        </div>
+
+        <button onclick="runNewtonRaphson()">Calculate Root</button>
+
+        <div class="results-section">
+            <h2>Results:</h2>
+            <p id="convergence-condition" class="info"></p>
+            <div id="results-table-container"></div>
+            <p id="final-root" class="success"></p>
+            <p id="error-message" class="error"></p>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
