@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Newton-Raphson Solver</title>
+<style>
+:root{--bg:#0b1020;--card:#141c30;--ink:#e8edf7;--mut:#93a0b8;--line:#27324c;--curve:#5b8cff;--pt:#ff7a4d;--ok:#3ddc97;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",system-ui,sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.7rem;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px}
+@media(max-width:640px){.row{grid-template-columns:1fr 1fr}.row label:first-child{grid-column:1/-1}}
+label{display:flex;flex-direction:column;font-size:.85rem;color:var(--mut);gap:4px}
+input{font:inherit;color:var(--ink);background:#0b1020;padding:9px 10px;border:1px solid var(--line);border-radius:6px}
+input:focus-visible,button:focus-visible{outline:2px solid var(--curve);outline-offset:1px}
+button{margin-top:14px;font:inherit;font-weight:600;background:var(--curve);color:#0b1020;border:0;border-radius:6px;padding:10px 18px;cursor:pointer}
+.err{color:#ff8a80;margin-top:10px;font-weight:600}
+.sum{display:flex;gap:28px;flex-wrap:wrap}
+.sum div{display:flex;flex-direction:column}
+.sum b{font-size:1.35rem;font-variant-numeric:tabular-nums}
+.sum span{color:var(--mut);font-size:.85rem}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.92rem}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--mut);font-weight:600}
+tr:last-child td{color:var(--ok);font-weight:600}
+canvas{width:100%;height:380px;display:block}
+.hint{color:var(--mut);font-size:.85rem;margin:8px 0 0}
+[hidden]{display:none}
+</style>
+</head>
+<body>
+<main>
+<h1>Newton-Raphson Root Finder</h1>
+<p class="sub">xₙ₊₁ = xₙ − f(xₙ) / f′(xₙ), repeated until the value stops changing.</p>
+
+<div class="card">
+  <div class="row">
+    <label>f(x)<input id="fn" value="x^3 - 8x + 5" autocomplete="off" spellcheck="false"></label>
+    <label>Initial guess x₀<input id="x0" value="0" inputmode="decimal"></label>
+    <label>Tolerance<input id="tol" value="1e-10"></label>
+    <label>Max iterations<input id="max" value="50" inputmode="numeric"></label>
+  </div>
+  <button id="go">Calculate root</button>
+  <p class="hint">Supports + − * / ^ ( ), 8x style products, sin cos tan exp ln log sqrt abs, and pi, e.</p>
+  <div id="err" class="err" hidden></div>
+</div>
+
+<div id="out" hidden>
+  <div class="card sum">
+    <div><b id="sRoot"></b><span>Root</span></div>
+    <div><b id="sN"></b><span>Iterations</span></div>
+    <div><b id="sF"></b><span>f(root)</span></div>
+    <div><b id="sWhy"></b><span>Stopped because</span></div>
+  </div>
+  <div class="card"><canvas id="cv"></canvas>
+    <p class="hint">Blue: f(x). Orange: each xₙ on the curve, joined by its tangent line down to the next xₙ₊₁. Green: the root.</p></div>
+  <div class="card wrap"><table>
+    <thead><tr><th>n</th><th>xₙ</th><th>f(xₙ)</th><th>f′(xₙ)</th><th>|xₙ₊₁ − xₙ|</th></tr></thead>
+    <tbody id="tb"></tbody></table></div>
+</div>
+</main>
+
+<script>
+// ---------- Expression parser (recursive descent, builds a JS closure) ----------
+const FUNCS={sin:Math.sin,cos:Math.cos,tan:Math.tan,exp:Math.exp,ln:Math.log,log:Math.log10,sqrt:Math.sqrt,abs:Math.abs};
+const CONSTS={pi:Math.PI,e:Math.E};
+function compile(src){
+  const re=/\s*(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+|[a-zA-Z]+|[-+*\/^()])/y;
+  const toks=[];let m;re.lastIndex=0;
+  while(re.lastIndex<src.length&&(m=re.exec(src)))toks.push(m[1]);
+  if(re.lastIndex<src.trim().length)throw new Error("Unrecognised character in f(x).");
+  let i=0;const peek=()=>toks[i],next=()=>toks[i++];
+  const isNum=t=>t&&/^[\d.]/.test(t),isId=t=>t&&/^[a-zA-Z]/.test(t);
+  function expr(){let l=term();while(peek()==="+"||peek()==="-"){const o=next(),r=term(),a=l;l=o==="+"?x=>a(x)+r(x):x=>a(x)-r(x)}return l}
+  function term(){let l=unary();
+    for(;;){const t=peek();let a=l,r;
+      if(t==="*"||t==="/"){next();r=unary();l=t==="*"?x=>a(x)*r(x):x=>a(x)/r(x)}
+      else if(isNum(t)||isId(t)||t==="("){r=unary();l=x=>a(x)*r(x)} // implicit product: 8x, 2(x+1)
+      else return l}}
+  function unary(){if(peek()==="-"){next();const f=unary();return x=>-f(x)}if(peek()==="+"){next();return unary()}return power()}
+  function power(){const b=atom();if(peek()==="^"){next();const e=unary();return x=>Math.pow(b(x),e(x))}return b}
+  function atom(){const t=next();
+    if(t===undefined)throw new Error("f(x) ends unexpectedly.");
+    if(isNum(t)){const v=parseFloat(t);return()=>v}
+    if(t==="("){const f=expr();if(next()!==")")throw new Error("Missing closing parenthesis.");return f}
+    if(isId(t)){const n=t.toLowerCase();
+      if(FUNCS[n]){if(next()!=="(")throw new Error(n+" needs parentheses, e.g. "+n+"(x).");const f=expr();if(next()!==")")throw new Error("Missing closing parenthesis.");const g=FUNCS[n];return x=>g(f(x))}
+      if(n==="x")return x=>x;
+      if(n in CONSTS){const v=CONSTS[n];return()=>v}
+      throw new Error("Unknown name: "+t)}
+    throw new Error("Unexpected \""+t+"\" in f(x).")}
+  const f=expr();if(i<toks.length)throw new Error("Unexpected \""+toks[i]+"\" in f(x).");return f}
+
+// ---------- Newton-Raphson ----------
+const deriv=(f,x)=>{const h=1e-6*Math.max(1,Math.abs(x));return(f(x+h)-f(x-h))/(2*h)};
+function newton(f,x0,tol,max){
+  const rows=[];let x=x0,why="Max iterations reached";
+  for(let n=0;n<max;n++){
+    const fx=f(x),d=deriv(f,x);
+    if(!isFinite(fx)||!isFinite(d)){why="f is undefined here";rows.push({n,x,fx,d,step:NaN});break}
+    if(Math.abs(d)<1e-12){why="f′(x) = 0, tangent is flat";rows.push({n,x,fx,d,step:NaN});break}
+    const xn=x-fx/d,step=Math.abs(xn-x);
+    rows.push({n,x,fx,d,step});
+    x=xn;
+    if(step<tol){why="Value stopped changing";rows.push({n:n+1,x,fx:f(x),d:deriv(f,x),step:NaN});break}
+  }
+  return{rows,why,root:x}}
+
+// ---------- Graph ----------
+function draw(f,rows){
+  const cv=document.getElementById("cv"),dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
+  cv.width=W*dpr;cv.height=H*dpr;const c=cv.getContext("2d");c.scale(dpr,dpr);c.clearRect(0,0,W,H);
+  const xs=rows.map(r=>r.x).filter(isFinite);if(!xs.length)return;
+  let lo=Math.min(...xs),hi=Math.max(...xs);const pad=Math.max(hi-lo,2)*0.35+0.5;lo-=pad;hi+=pad;
+  const N=500,ys=[];for(let k=0;k<=N;k++){const y=f(lo+(hi-lo)*k/N);if(isFinite(y))ys.push(y)}
+  ys.sort((a,b)=>a-b);
+  let yl=ys.length?ys[Math.floor(ys.length*.03)]:-1,yh=ys.length?ys[Math.floor(ys.length*.97)]:1;
+  rows.forEach(r=>{if(isFinite(r.fx)&&Math.abs(r.fx)<Math.max(1,(yh-yl))*3){yl=Math.min(yl,r.fx);yh=Math.max(yh,r.fx)}});
+  yl=Math.min(yl,0);yh=Math.max(yh,0);if(yh-yl<1e-9){yl-=1;yh+=1}const yp=(yh-yl)*.1;yl-=yp;yh+=yp;
+  const L=44,R=12,T=10,B=26,pw=W-L-R,ph=H-T-B;
+  const X=x=>L+(x-lo)/(hi-lo)*pw,Y=y=>T+(yh-y)/(yh-yl)*ph;
+  const tick=(a,b)=>{const s=(b-a)/6,p=Math.pow(10,Math.floor(Math.log10(s))),u=[1,2,5,10].find(m=>m*p>=s)*p,t=[];for(let v=Math.ceil(a/u)*u;v<=b;v+=u)t.push(+v.toPrecision(12));return t};
+  c.font="12px 'Segoe UI',system-ui,sans-serif";c.lineWidth=1;
+  c.strokeStyle="#222c45";c.fillStyle="#93a0b8";
+  tick(lo,hi).forEach(v=>{c.beginPath();c.moveTo(X(v),T);c.lineTo(X(v),T+ph);c.stroke();c.textAlign="center";c.fillText(+v.toFixed(4),X(v),H-8)});
+  tick(yl,yh).forEach(v=>{c.beginPath();c.moveTo(L,Y(v));c.lineTo(L+pw,Y(v));c.stroke();c.textAlign="right";c.fillText(+v.toFixed(4),L-6,Y(v)+4)});
+  c.save();c.beginPath();c.rect(L,T,pw,ph);c.clip();
+  c.strokeStyle="#c9d3e6";c.lineWidth=1.4;
+  c.beginPath();c.moveTo(L,Y(0));c.lineTo(L+pw,Y(0));c.stroke();
+  if(lo<0&&hi>0){c.beginPath();c.moveTo(X(0),T);c.lineTo(X(0),T+ph);c.stroke()}
+  // curve
+  c.strokeStyle="#5b8cff";c.lineWidth=2.2;c.beginPath();let pen=false;
+  for(let k=0;k<=N*2;k++){const x=lo+(hi-lo)*k/(N*2),y=f(x);
+    if(!isFinite(y)||Math.abs(y)>1e9){pen=false;continue}
+    pen?c.lineTo(X(x),Y(y)):c.moveTo(X(x),Y(y));pen=true}
+  c.stroke();
+  // tangents + points
+  const pts=rows.filter(r=>isFinite(r.x)&&isFinite(r.fx));
+  c.lineWidth=1.2;c.setLineDash([5,4]);c.strokeStyle="#ff7a4d";
+  pts.forEach((r,k)=>{if(k<pts.length-1){c.beginPath();c.moveTo(X(r.x),Y(r.fx));c.lineTo(X(pts[k+1].x),Y(0));c.stroke()}});
+  c.setLineDash([]);
+  pts.forEach((r,k)=>{const last=k===pts.length-1&&pts.length>1;
+    c.fillStyle=last?"#3ddc97":"#ff7a4d";c.beginPath();c.arc(X(r.x),Y(r.fx),last?6:4.5,0,7);c.fill();
+    if(k<8||last){c.fillStyle="#e8edf7";c.textAlign="left";c.fillText("x"+r.n,X(r.x)+7,Y(r.fx)-7)}});
+  c.restore()}
+
+// ---------- UI ----------
+let last=null;
+const $=id=>document.getElementById(id),fmt=v=>isFinite(v)?(Math.abs(v)<1e-4&&v!==0?v.toExponential(4):+v.toFixed(8)).toString():"—";
+function run(){
+  const err=$("err");err.hidden=true;
+  try{
+    const f=compile($("fn").value),x0=parseFloat($("x0").value),tol=parseFloat($("tol").value),max=parseInt($("max").value,10);
+    if(!isFinite(x0))throw new Error("x₀ must be a number.");
+    if(!(tol>0))throw new Error("Tolerance must be a positive number, e.g. 1e-10.");
+    if(!(max>0))throw new Error("Max iterations must be at least 1.");
+    if(!isFinite(f(x0)))throw new Error("f(x₀) is not defined. Try another starting value.");
+    const r=newton(f,x0,tol,max);last={f,rows:r.rows};
+    const fin=r.rows[r.rows.length-1];
+    $("sRoot").textContent=fmt(r.root);$("sN").textContent=r.rows.length-1>0&&r.why==="Value stopped changing"?r.rows.length-1:r.rows.length;
+    $("sF").textContent=fmt(f(r.root));$("sWhy").textContent=r.why;$("sWhy").style.fontSize="1rem";
+    $("tb").innerHTML=r.rows.map(w=>`<tr><td>${w.n}</td><td>${fmt(w.x)}</td><td>${fmt(w.fx)}</td><td>${fmt(w.d)}</td><td>${fmt(w.step)}</td></tr>`).join("");
+    $("out").hidden=false;draw(f,r.rows);
+  }catch(e){err.textContent=e.message;err.hidden=false;$("out").hidden=true}}
+$("go").onclick=run;
+document.querySelectorAll("input").forEach(i=>i.addEventListener("keydown",e=>{if(e.key==="Enter")run()}));
+addEventListener("resize",()=>{if(last&&!$("out").hidden)draw(last.f,last.rows)});
+</script>
+</body>
+</html>
